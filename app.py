@@ -150,12 +150,15 @@ def ip_in_subnet(ip_str: str, cidr: str) -> bool:
     except Exception:
         return False
 
-def follow_log(filepath):
+def follow_log(filepath, start_at_end: bool = True):
     # Wait for the file to be created by the subprocess
     while not os.path.exists(filepath):
         time.sleep(1)
     with open(filepath, 'r') as f:
-        f.seek(0, os.SEEK_END)
+        if start_at_end:
+            f.seek(0, os.SEEK_END)
+        else:
+            f.seek(0)
         while True:
             line = f.readline()
             if not line:
@@ -461,20 +464,20 @@ STATUS_HTML = (
         document.getElementById("destroy_status").textContent = JSON.stringify(data.destroy, null, 2);
         document.getElementById("outputs").textContent = fmtOutputs(data.outputs || { message: "no outputs yet" });
 
-        // Optional: show a handy line if instance_id present
-        const meta = document.getElementById("instance_meta");
-        if (data.outputs && data.outputs.instance_id) {
-          const region = data.outputs.region || "{{ default_region }}";
-          meta.textContent = `Instance: ${data.outputs.instance_id}  •  Region: ${region}`;
-        } else {
-          meta.textContent = "";
-        }
+        // Show only the running log stream (apply or destroy). Hide both if none running.
+        const applyRunning = data.apply && data.apply.state === "running";
+        const destroyRunning = data.destroy && data.destroy.state === "running";
+        document.getElementById("apply_card").style.display = applyRunning ? "block" : "none";
+        document.getElementById("destroy_card").style.display = destroyRunning ? "block" : "none";
       } catch (e) {
         console.error("Failed to refresh status:", e);
       }
     }
 
     window.addEventListener("DOMContentLoaded", () => {
+      // Hide both on load; refresh will reveal the active one
+      document.getElementById("apply_card").style.display = "none";
+      document.getElementById("destroy_card").style.display = "none";
       refreshStatus();
       setInterval(refreshStatus, 5000);
     });
@@ -519,11 +522,11 @@ STATUS_HTML = (
     </div>
 
     <div class="grid">
-      <div class="card">
+      <div id="apply_card" class="card">
         <h2>Live Apply Logs</h2>
         <iframe src="/apply_logs"></iframe>
       </div>
-      <div class="card">
+      <div id="destroy_card" class="card">
         <h2>Live Destroy Logs</h2>
         <iframe src="/destroy_logs"></iframe>
       </div>
@@ -610,7 +613,15 @@ def apply_route():
             f.write(f'subnet_id     = "{subnet_id}"\n')
             f.write(f'private_ip    = "{private_ip}"\n')
             f.write(f'key_name      = "{key_name}"\n')
-            f.write(f'instance_name = "{instance_name}"\n')
+            # Only write instance_name if user provided it (prevents empty string overriding TF default)
+            if instance_name:
+                f.write(f'instance_name = "{instance_name}"\n')
+
+        # Clear the *other* action's log so only the running action's log shows fresh
+        try:
+            open(DESTROY_LOG, "w").close()
+        except Exception:
+            pass
 
         # Background apply
         threading.Thread(
@@ -641,6 +652,12 @@ def destroy():
 
     if pwd != DESTROY_PASSWORD:
         return "Unauthorized: invalid password.", 401
+
+    # Clear the *other* action's log so only the running action's log shows fresh
+    try:
+        open(APPLY_LOG, "w").close()
+    except Exception:
+        pass
 
     threading.Thread(
         target=run_terraform,
@@ -715,11 +732,12 @@ def destroy_logs():
 # ---- SSE Streaming Routes ----
 @app.route('/stream/apply_logs')
 def stream_apply_logs():
-    return Response(follow_log(APPLY_LOG), mimetype='text/event-stream')
+    return Response(follow_log(APPLY_LOG, start_at_end=True), mimetype='text/event-stream')
 
 @app.route('/stream/destroy_logs')
 def stream_destroy_logs():
-    return Response(follow_log(DESTROY_LOG), mimetype='text/event-stream')
+    # Start destroy stream from the beginning so late opens still see full context
+    return Response(follow_log(DESTROY_LOG, start_at_end=False), mimetype='text/event-stream')
 
 
 # ---- JSON APIs ----
@@ -849,4 +867,3 @@ def get_subnet_range():
 # ---------------- Entry ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, debug=True)
-
