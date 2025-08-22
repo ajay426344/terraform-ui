@@ -71,7 +71,6 @@ def terraform_capture_outputs():
         raw = json.loads(res.stdout or "{}")
         simplified = {}
         for k, v in raw.items():
-            # Terraform -json returns { value: X, type: ..., sensitive: ... }
             simplified[k] = v.get("value")
         with open(OUTPUTS_JSON, "w") as f:
             json.dump(simplified, f, indent=2)
@@ -460,6 +459,20 @@ STATUS_HTML = (
       }
     }
 
+    function renderTags(tagMap) {
+      const el = document.getElementById("tags_view");
+      if (!tagMap || typeof tagMap !== "object" || Object.keys(tagMap).length === 0) {
+        el.innerHTML = "<em>No tags</em>";
+        return;
+      }
+      // Simple key=value list
+      const items = Object.keys(tagMap).sort().map(k => {
+        const v = tagMap[k];
+        return `<code>${k}</code> = <code>${String(v)}</code>`;
+      });
+      el.innerHTML = items.map(i => `<div>${i}</div>`).join("");
+    }
+
     async function refreshStatus() {
       try {
         const res = await fetch("/api/status");
@@ -468,6 +481,11 @@ STATUS_HTML = (
         document.getElementById("state").textContent = data.state || "No state";
         document.getElementById("apply_status").textContent = JSON.stringify(data.apply, null, 2);
         document.getElementById("destroy_status").textContent = JSON.stringify(data.destroy, null, 2);
+
+        // Prefer effective applied tags, else raw tags
+        const tagMap = data.outputs && (data.outputs.applied_tags || data.outputs.tags);
+        renderTags(tagMap);
+
         document.getElementById("outputs").textContent = fmtOutputs(data.outputs || { message: "no outputs yet" });
 
         // Show only the running log stream (apply or destroy). Hide both if none running.
@@ -522,7 +540,8 @@ STATUS_HTML = (
     <div class="grid" style="margin-bottom:22px;">
       <div class="card">
         <h2>Latest Outputs</h2>
-        <div id="instance_meta" style="font-size:13px; color:#64748b; margin-bottom:8px;"></div>
+        <div style="font-size:13px; color:#64748b; margin-bottom:8px;">Tags</div>
+        <div id="tags_view" style="margin-bottom:10px;"></div>
         <pre id="outputs">{ "message": "no outputs yet" }</pre>
       </div>
     </div>
@@ -621,7 +640,7 @@ def apply_route():
                 k, v = chunk.split("=", 1)
                 key = k.strip().strip('"').strip("'")
                 val = v.strip().strip().strip('"').strip("'")
-                # Escape backslashes and double quotes for HCL string
+                # Escape for HCL string
                 val = val.replace("\\", "\\\\").replace('"', '\\"')
                 if key:
                     pairs.append(f'"{key}" = "{val}"')
@@ -639,10 +658,8 @@ def apply_route():
             f.write(f'subnet_id     = "{subnet_id}"\n')
             f.write(f'private_ip    = "{private_ip}"\n')
             f.write(f'key_name      = "{key_name}"\n')
-            # Only write instance_name if user provided it (prevents empty string overriding TF default)
             if instance_name:
                 f.write(f'instance_name = "{instance_name}"\n')
-            # Write tags map if provided
             if tag_pairs:
                 f.write("tags = {\n")
                 for p in tag_pairs:
@@ -787,7 +804,7 @@ def api_status():
         "state": get_state_list(),
         "apply": read_status(APPLY_STATUS),
         "destroy": read_status(DESTROY_STATUS),
-        "outputs": read_outputs(),  # NEW
+        "outputs": read_outputs(),  # shows tags/applied_tags once TF outputs include them
     })
 
 # ---- Logs Editor (simple) ----

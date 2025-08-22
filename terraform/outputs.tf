@@ -29,3 +29,21 @@ output "region" {
   value = var.region
 }
 
+# Raw tags provided from the UI
+output "tags" {
+  value       = var.tags
+  description = "Tags provided via UI"
+}
+
+# Effective tags that were applied to the instance (UI tags + Name tag)
+output "applied_tags" {
+  value = merge(
+    var.tags,
+    {
+      # Keep this logic in sync with your resource tag composition
+      Name = var.instance_name != "" ? var.instance_name : "dynamic-os-instance"
+    }
+  )
+  description = "Effective tags applied (merged with Name)"
+}
+
