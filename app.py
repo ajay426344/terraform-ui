@@ -406,6 +406,12 @@ APPLY_FORM = (
           </div>
 
           <div>
+            <label>Tags (optional)</label>
+            <input type="text" name="tags" placeholder='e.g., domain="adcrtl",creator="ajay"' />
+            <small class="hint">Enter tags as key="value",key="value"</small>
+          </div>
+
+          <div>
             <label>Private IP (static)</label>
             <input type="text" name="private_ip" placeholder="e.g., 10.0.1.25" required />
             <small class="hint">Must be inside the selected subnet CIDR and not in use.</small>
@@ -591,6 +597,7 @@ def apply_route():
         private_ip    = request.form["private_ip"]
         key_name      = request.form.get("key_name", "").strip()
         instance_name = request.form.get("instance_name", "").strip()
+        tags_raw      = request.form.get("tags", "").strip()
 
         # Validate subnet/IP before launching
         ec2 = ec2_client(region)
@@ -602,6 +609,25 @@ def apply_route():
 
         if not ip_in_subnet(private_ip, subnet_cidr):
             return f"<pre>Private IP {private_ip} is not inside subnet CIDR {subnet_cidr}.</pre>", 400
+
+        # Parse tags like: key="value",creator="ajay"
+        def build_tags_map(tags_str: str):
+            if not tags_str:
+                return []
+            pairs = []
+            for chunk in tags_str.split(","):
+                if "=" not in chunk:
+                    continue
+                k, v = chunk.split("=", 1)
+                key = k.strip().strip('"').strip("'")
+                val = v.strip().strip().strip('"').strip("'")
+                # Escape backslashes and double quotes for HCL string
+                val = val.replace("\\", "\\\\").replace('"', '\\"')
+                if key:
+                    pairs.append(f'"{key}" = "{val}"')
+            return pairs
+
+        tag_pairs = build_tags_map(tags_raw)
 
         # tfvars for Terraform
         os.makedirs(TF_DIR, exist_ok=True)
@@ -616,8 +642,14 @@ def apply_route():
             # Only write instance_name if user provided it (prevents empty string overriding TF default)
             if instance_name:
                 f.write(f'instance_name = "{instance_name}"\n')
+            # Write tags map if provided
+            if tag_pairs:
+                f.write("tags = {\n")
+                for p in tag_pairs:
+                    f.write(f"  {p}\n")
+                f.write("}\n")
 
-        # Clear the *other* action's log so only the running action's log shows fresh
+        # Clear the other action's log so only the running action’s log shows fresh
         try:
             open(DESTROY_LOG, "w").close()
         except Exception:
@@ -653,7 +685,7 @@ def destroy():
     if pwd != DESTROY_PASSWORD:
         return "Unauthorized: invalid password.", 401
 
-    # Clear the *other* action's log so only the running action's log shows fresh
+    # Clear the other action's log so only the running action’s log shows fresh
     try:
         open(APPLY_LOG, "w").close()
     except Exception:
@@ -867,3 +899,4 @@ def get_subnet_range():
 # ---------------- Entry ----------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, debug=True)
+

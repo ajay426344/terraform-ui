@@ -167,10 +167,12 @@ resource "aws_instance" "os_based_instance" {
   # Set hostname via user_data for both Linux and Windows
   user_data = local.chosen_user_data
 
-  tags = {
-    Name = local.effective_instance_name
-    OS   = var.os_type
-  }
+  tags = merge(
+    var.tags,
+    {
+      Name = var.instance_name != "" ? var.instance_name : "dynamic-os-instance"
+    }
+  )
 
   # Optional guard: don't recreate instance when an AMI's "latest" drifts
   lifecycle {
